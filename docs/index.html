@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Claude remembers your work</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #EBEEF2; --sheet: #FFFFFF; --lane: #F4F6F9; --ink: #162033; --muted: #5D6779; --rule: #D2D8E0;
+  --turn: #2B4FD8; --sync: #08875E; --look: #E09A00; --signal: #D7263D; --focus: #2B4FD8;
+  --prop: #7A3FC8; --on-prop: #FFFFFF; --full: #3B4A63; --on-full: #FFFFFF;
+  --on-turn: #FFFFFF; --on-sync: #FFFFFF; --on-look: #1B1405;
+  --font: "Avenir Next", "Avenir", "Bahnschrift", "Segoe UI Variable Text", "Segoe UI", "Ubuntu", "Cantarell", system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0D121A; --sheet: #141B26; --lane: #19212E; --ink: #E6EBF2; --muted: #98A3B4; --rule: #2A3443;
+    --turn: #7088FF; --sync: #2FC796; --look: #F3B437; --signal: #FF5D6E; --focus: #8FA2FF;
+    --on-turn: #0D121A; --on-sync: #0D121A; --on-look: #0D121A;
+    --prop: #B794FF; --on-prop: #0D121A; --full: #A9B6CC; --on-full: #0D121A;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 18px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+code { font: 500 0.86em var(--mono); }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 32px; }
+
+/* header */
+.top { display: flex; align-items: center; gap: 28px; padding: 22px 0; }
+.mark-word { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; text-decoration: none; }
+.top nav { display: flex; gap: 22px; margin-left: auto; }
+.top nav a { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 500; color: var(--muted); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+.top nav i { width: 16px; height: 3px; border-radius: 2px; background: var(--c); }
+
+/* hero */
+.hero { padding: 40px 0 24px; }
+.hero h1 { font-size: clamp(40px, 5.2vw, 64px); line-height: 1.04; letter-spacing: -0.025em; font-weight: 700; margin: 0 0 22px; }
+.hero p { font-size: 21px; line-height: 1.5; color: var(--muted); margin: 0; }
+.key { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 34px; font-size: 15px; color: var(--muted); }
+.key span { display: inline-flex; align-items: center; gap: 10px; }
+.key svg { width: 40px; height: 22px; flex: none; }
+
+/* route sections */
+.route { padding-top: 84px; scroll-margin-top: 16px; }
+.route-head { display: flex; align-items: center; gap: 16px; }
+.route h2 { font-size: 36px; line-height: 1.1; letter-spacing: -0.015em; margin: 0; font-weight: 700; }
+.route-head + p { margin: 8px 0 22px; color: var(--muted); font-size: 19px; }
+.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; overflow-x: auto; }
+.sheet svg { display: block; width: 100%; min-width: 980px; height: auto; }
+.dock { position: relative; padding: 36px 4px 0 0; }
+.cap-name { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.cap-desc { margin: 2px 0 0; font-size: 16px; }
+.cap-meta { margin-top: 4px; font-size: 13px; color: var(--muted); min-height: 1.4em; }
+.ctrls { display: flex; gap: 10px; position: absolute; top: 34px; right: 4px; }
+.btn { font: 600 13px var(--font); padding: 7px 14px; border-radius: 999px; border: 1.5px solid var(--rule); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--ink); }
+.btn.go { background: var(--line); border-color: var(--line); color: var(--on); min-width: 78px; }
+.btn.go:hover { filter: brightness(1.08); }
+.btn:focus-visible, .top nav a:focus-visible, .mark-word:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+/* map pieces */
+.lane rect { fill: var(--lane); } .lane.alt rect { fill: none; }
+.lane-t { font: 600 14px var(--font); fill: var(--muted); }
+.lane-r { stroke: var(--rule); stroke-width: 1; }
+.edge { fill: none; stroke: var(--line); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; transition: opacity .35s; }
+.edge.warn { stroke: var(--signal); stroke-width: 2.5; stroke-dasharray: 6 5; }
+.edge.alt { stroke-width: 2.5; stroke-dasharray: 6 5; }
+svg.riding .edge { opacity: .25; } svg.riding .edge.been { opacity: 1; }
+.stn { cursor: pointer; outline: none; }
+.stn .hit { fill: transparent; }
+.stn .mk { fill: var(--sheet); stroke: var(--ink); stroke-width: 2.2; transition: fill .25s; }
+.stn.end .mk { stroke-width: 2.6; }
+.stn.warn .mk { stroke: var(--signal); }
+.stn.been .mk { fill: color-mix(in srgb, var(--line) 30%, var(--sheet)); }
+.stn.here .mk { fill: var(--line); }
+.stn.warn.here .mk { fill: var(--signal); }
+.stn:hover .mk { stroke-width: 3; }
+.stn:focus-visible .mk { stroke: var(--focus); stroke-width: 3.5; }
+.stn .pulse { fill: none; stroke: var(--line); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.stn.warn .pulse { stroke: var(--signal); }
+.stn.here .pulse { animation: pulse 1.1s ease-out; }
+@keyframes pulse { from { opacity: .8; transform: scale(1); } to { opacity: 0; transform: scale(2.8); } }
+.nm { font: 600 15px var(--font); fill: var(--ink); }
+.cd { font: 500 12.5px var(--mono); fill: var(--muted); }
+.nt { font: 500 13.5px var(--font); fill: var(--muted); }
+.halo { paint-order: stroke; stroke: var(--sheet); stroke-width: 6px; stroke-linejoin: round; }
+.tile rect { fill: var(--sheet); stroke: var(--rule); stroke-width: 1.5; transition: fill .3s, stroke .3s; }
+.tile line { stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.tile text { font: 500 13.5px var(--font); fill: var(--muted); }
+.tile.lit rect { fill: color-mix(in srgb, var(--line) 16%, var(--sheet)); stroke: var(--line); }
+.tile.lit text { fill: var(--ink); }
+.train { transition: opacity .3s; pointer-events: none; }
+.train rect { fill: var(--ink); stroke: var(--sheet); stroke-width: 1.5; }
+
+footer { padding: 96px 0 48px; color: var(--muted); font-size: 15px; }
+
+/* proposal section */
+.badge { font: 600 13px var(--font); color: var(--line); border: 1.5px solid var(--line); border-radius: 999px; padding: 2px 11px; margin-left: 2px; white-space: nowrap; }
+.sub-h { font-size: 22px; line-height: 1.2; font-weight: 700; margin: 44px 0 6px; }
+.sub-h + p { margin: 0 0 18px; color: var(--muted); font-size: 17px; }
+.fm .box { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.6; }
+.fm .box.gen { fill: color-mix(in srgb, var(--line) 6%, var(--sheet)); stroke: var(--line); stroke-dasharray: 6 4; }
+.fm .fn { font: 600 17px var(--mono); fill: var(--ink); }
+.fm .fs { font: 500 14.5px var(--font); fill: var(--ink); }
+.fm .fx { font: 500 13.5px var(--font); fill: var(--muted); }
+.fm .gt { font: 600 12.5px var(--font); fill: var(--line); }
+.fm .flow { fill: none; stroke: var(--line); stroke-width: 2; }
+.fm .flow.thin { stroke-width: 1.5; stroke-dasharray: 4 4; }
+.fm .pill { fill: var(--line); }
+.fm .pt { font: 600 15px var(--mono); fill: var(--on); }
+.fm .ps { font: 500 12.5px var(--font); fill: var(--on); opacity: .85; }
+
+/* poster mode (?poster=overview|turn|sync|lookup): static images for sharing */
+html.poster {
+  color-scheme: light;
+  --page: #EBEEF2; --sheet: #FFFFFF; --lane: #F4F6F9; --ink: #162033; --muted: #5D6779; --rule: #D2D8E0;
+  --turn: #2B4FD8; --sync: #08875E; --look: #E09A00; --signal: #D7263D; --prop: #7A3FC8; --on-prop: #FFFFFF; --full: #3B4A63; --on-full: #FFFFFF;
+}
+html.poster .top, html.poster .hero, html.poster footer, html.poster .dock, html.poster .route { display: none; }
+html.poster .route.show { display: block; padding-top: 0; }
+html.poster .wrap { margin: 0; max-width: none; padding: 48px 48px 40px; }
+html.poster .sheet { overflow: visible; }
+html.poster .sheet svg { min-width: 0; }
+.poster-overview h1 { font-size: 56px; line-height: 1.05; letter-spacing: -0.025em; margin: 0 0 12px; }
+.poster-overview > p { font-size: 21px; color: var(--muted); margin: 0 0 8px; max-width: 60ch; }
+.ov { display: block; width: 100%; height: auto; }
+.ov .ln { fill: none; stroke: var(--line); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+.ov .stop { fill: var(--sheet); stroke: var(--ink); stroke-width: 2.6; }
+.ov .end { fill: var(--sheet); stroke: var(--ink); stroke-width: 3; }
+.ov .hub { fill: var(--sheet); stroke: var(--ink); stroke-width: 4.5; }
+.ov .hub-t { font: 600 32px var(--mono); fill: var(--ink); }
+.ov .hub-s { font: 500 17px var(--font); fill: var(--muted); }
+.ov .nm { font: 700 28px var(--font); fill: var(--ink); }
+.ov .sm { font: 500 19px var(--font); fill: var(--muted); }
+.poster-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; color: var(--muted); font-size: 15px; }
+.poster-foot .key { margin-top: 0; }
+
+@media (max-width: 900px) {
+  .hero { padding-top: 16px; }
+  .top nav { display: none; }
+  .route-head + p, .dock { margin-left: 0; padding-left: 0; }
+  .ctrls { position: static; margin-top: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .stn.here .pulse { animation: none; }
+  .edge, .train, .stn .mk { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="mark-word" href="#">Claude memory system</a>
+    <nav>
+      <a href="#full" style="--c: var(--full)"><i></i>Full flow</a>
+      <a href="#turn" style="--c: var(--turn)"><i></i>Every turn</a>
+      <a href="#sync" style="--c: var(--sync)"><i></i>Sync</a>
+      <a href="#files" style="--c: var(--prop)"><i></i>Files</a>
+      <a href="#lookup" style="--c: var(--look)"><i></i>Lookup</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1>How Claude remembers your work</h1>
+      <p>Every request leaves a note in the project’s memory folder. Sync copies it between machines, and lookups read it back.</p>
+      <div class="key">
+        <span><svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--turn)" stroke-width="3.5" stroke-linecap="round"/><circle cx="20" cy="11" r="4.5" fill="var(--sheet)" stroke="var(--ink)" stroke-width="2"/></svg>Step</span>
+        <span><svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--turn)" stroke-width="3.5" stroke-linecap="round"/><path d="M20 4L27 11L20 18L13 11Z" fill="var(--sheet)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/></svg>Check</span>
+        <span><svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--signal)" stroke-width="2" stroke-dasharray="4 4"/><circle cx="20" cy="11" r="4.5" fill="var(--sheet)" stroke="var(--signal)" stroke-width="2"/></svg>Blocked</span>
+        <span><svg viewBox="0 0 40 22"><rect x="4" y="3" width="32" height="16" rx="3" fill="var(--sheet)" stroke="var(--muted)" stroke-width="1.5"/></svg>File saved</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="route" id="full" style="--line: var(--full); --on: var(--on-full)">
+    <div class="route-head"><h2>The full workflow</h2></div>
+    <p>One request from start to finish: who acts, where each step saves, and where it ends up later.</p>
+    <div class="sheet"><svg id="map-full" role="group" aria-label="Full workflow route map"></svg></div>
+    <div class="dock" data-map="full"></div>
+  </section>
+
+  <section class="route" id="turn" style="--line: var(--turn); --on: var(--on-turn)">
+    <div class="route-head"><h2>Every turn</h2></div>
+    <p>From your request to a saved note. Each row shows who is acting.</p>
+    <div class="sheet"><svg id="map-turn" role="group" aria-label="Every turn route map"></svg></div>
+    <div class="dock" data-map="turn"></div>
+  </section>
+
+  <section class="route" id="sync" style="--line: var(--sync); --on: var(--on-sync)">
+    <div class="route-head"><h2>Sync between machines</h2></div>
+    <p>Run <code>/memory-sync</code> when you switch machines. Each row is a place the notes pass through.</p>
+    <div class="sheet"><svg id="map-sync" role="group" aria-label="Sync route map"></svg></div>
+    <div class="dock" data-map="sync"></div>
+  </section>
+
+  <section class="route" id="files" style="--line: var(--prop); --on: var(--on-prop)">
+    <div class="route-head"><h2>What’s in memory/</h2></div>
+    <p>Generated files stay small. One lookup script searches the notes and every history entry; grep is only a fallback.</p>
+    <div class="sheet"><svg class="fm" viewBox="0 0 1290 520" role="img" aria-label="Proposed files in memory/: INDEX, TAGS, notes and history are written; build-refs.sh generates REFS.md and one refs file per month.">
+      <defs><marker id="fm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9z" fill="var(--line)"/></marker></defs>
+
+      <rect class="box" x="60" y="36" width="380" height="70" rx="8"/>
+      <text class="fn" x="82" y="66">INDEX.md</text><text class="fs" x="82" y="90">Orientation and how-tos, no note list</text>
+      <text class="fx" x="462" y="76">Read first, before changing code</text>
+
+      <rect class="box" x="60" y="136" width="380" height="70" rx="8"/>
+      <text class="fn" x="82" y="166">TAGS.md</text><text class="fs" x="82" y="190">The allowed tags and their meaning</text>
+
+      <rect class="box" x="60" y="236" width="380" height="70" rx="8"/>
+      <text class="fn" x="82" y="266">&lt;folder&gt;/&lt;type&gt;-&lt;name&gt;.md</text><text class="fs" x="82" y="290">Each note, with a one-line Summary:</text>
+
+      <rect class="box" x="60" y="336" width="380" height="96" rx="8"/>
+      <text class="fn" x="82" y="366">history/YYYY-Www.md</text><text class="fs" x="82" y="390">One entry per prompt, one file per week</text>
+      <text class="fx" x="82" y="414">Weeks start on Sunday. Searched by the lookup script</text>
+      <text class="fx" x="60" y="462">The ID names its file:</text>
+      <text class="cd" x="222" y="462">H-2026W42-0042</text><text class="fx" x="342" y="462">→</text><text class="cd" x="364" y="462">history/2026-W42.md</text>
+
+      <path class="flow" d="M440 171 H486 Q498 171 498 183 V247 Q498 259 510 259 H556" marker-end="url(#fm-a)"/>
+      <path class="flow" d="M440 271 H556" marker-end="url(#fm-a)"/>
+      <path class="flow" d="M440 371 H486 Q498 371 498 359 V295 Q498 283 510 283 H556" marker-end="url(#fm-a)"/>
+
+      <rect class="pill" x="560" y="243" width="184" height="56" rx="28"/>
+      <text class="pt" x="652" y="268" text-anchor="middle">build-refs.sh</text><text class="ps" x="652" y="287" text-anchor="middle">every turn</text>
+
+      <path class="flow" d="M744 265 H776 Q788 265 788 253 V156 Q788 144 800 144 H826" marker-end="url(#fm-a)"/>
+      <path class="flow" d="M744 277 H776 Q788 277 788 289 V322 Q788 334 800 334 H826" marker-end="url(#fm-a)"/>
+
+      <rect class="box gen" x="830" y="96" width="400" height="96" rx="8"/>
+      <text class="fn" x="852" y="128">REFS.md</text><text class="gt" x="1212" y="126" text-anchor="end">generated</text>
+      <text class="fs" x="852" y="152">Notes, tags, and a list of months</text>
+      <text class="fx" x="852" y="176">Read in full. About 20 KB after a year</text>
+
+      <rect class="box gen" x="830" y="286" width="400" height="96" rx="8"/>
+      <text class="fn" x="852" y="318">refs/YYYY-MM.md</text><text class="gt" x="1212" y="316" text-anchor="end">generated</text>
+      <text class="fs" x="852" y="342">Entries with a Did, plus one line per week</text>
+      <text class="fx" x="852" y="366">Read in full. About 40–50 KB a month</text>
+
+      <path class="flow thin" d="M1150 286 V196" marker-end="url(#fm-a)"/>
+      <text class="fx" x="1162" y="246">month list</text>
+
+      <rect x="60" y="490" width="26" height="14" rx="3" fill="var(--sheet)" stroke="var(--ink)" stroke-width="1.6"/>
+      <text class="fx" x="96" y="502">Written by Claude or hooks</text>
+      <rect x="310" y="490" width="26" height="14" rx="3" fill="color-mix(in srgb, var(--line) 6%, var(--sheet))" stroke="var(--line)" stroke-width="1.6" stroke-dasharray="5 3"/>
+      <text class="fx" x="346" y="502">Generated, never edited by hand</text>
+    </svg></div>
+
+
+  </section>
+
+  <section class="route" id="lookup" style="--line: var(--look); --on: var(--on-look)">
+    <div class="route-head"><h2>Finding past work</h2></div>
+    <p>What Claude does when you ask about something you did before. The lookup script always runs first.</p>
+    <div class="sheet"><svg id="map-lookup" role="group" aria-label="Lookup route map"></svg></div>
+    <div class="dock" data-map="lookup"></div>
+  </section>
+
+
+  <section class="poster-overview" hidden>
+    <h1>How Claude remembers your work</h1>
+    <p>Every request leaves a note in the project’s memory folder. Sync copies it between machines, and lookups read it back.</p>
+    <svg class="ov" viewBox="0 0 1766 640" role="img" aria-label="Overview of the three routes around the memory folder">
+      <g style="--line: var(--look)"><path class="ln" d="M200,120 H683 L819.36,256.36"/>
+        <circle class="end" cx="200" cy="120" r="9"/><circle class="stop" cx="330" cy="120" r="6"/><circle class="stop" cx="470" cy="120" r="6"/>
+        <text class="nm" x="188" y="84">Lookup</text>
+        <text class="sm" x="188" y="164">One script searches notes and every entry.</text>
+        <text class="sm" x="188" y="190">Grep only after it; a hook enforces that.</text></g>
+      <g style="--line: var(--turn)"><path class="ln" d="M200,520 H683 L819.36,383.64"/>
+        <circle class="end" cx="200" cy="520" r="9"/><circle class="stop" cx="330" cy="520" r="6"/><circle class="stop" cx="470" cy="520" r="6"/>
+        <text class="nm" x="188" y="484">Every turn</text>
+        <text class="sm" x="188" y="564">Hooks log each request; Claude writes a note.</text>
+        <text class="sm" x="188" y="590">A check stops the turn if a note or the Did is missing.</text></g>
+      <g style="--line: var(--sync)"><path class="ln" d="M973,320 H1560"/>
+        <circle class="end" cx="1560" cy="320" r="9"/><circle class="stop" cx="1130" cy="320" r="6"/><circle class="stop" cx="1330" cy="320" r="6"/>
+        <text class="nm" x="1572" y="284" text-anchor="end">Sync</text>
+        <text class="sm" x="1572" y="364" text-anchor="end">Copy in, commit, pull, copy back, push.</text>
+        <text class="sm" x="1572" y="390" text-anchor="end">A conflict stops it before anything is copied back.</text></g>
+      <circle class="hub" cx="883" cy="320" r="90"/>
+      <text class="hub-t" x="883" y="322" text-anchor="middle">memory/</text>
+      <text class="hub-s" x="883" y="352" text-anchor="middle">one per project</text>
+    </svg>
+  </section>
+
+  <footer>A generic map of a hook-based memory system for Claude Code. Works offline. Source and installer: <a href="https://github.com/abusaeed2433/agent-memory">github.com/abusaeed2433/agent-memory</a>.</footer>
+</div>
+
+<script>
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const NS = "http://www.w3.org/2000/svg";
+
+/* ---------- route data ---------- */
+// station: [x, y, type, label position, name, description, meta, code]
+// type: stop | end | check | warn   label: a (above) | b (below) | bl (below left)
+const MAPS = {
+  turn: {
+    w: 1290, h: 510, idle: "Follow a request",
+    lanes: [["You", 90, 40, 140], ["Hooks", 190, 140, 240], ["Claude", 290, 240, 410], ["Saved to", 460, 410, 510]],
+    stations: {
+      req: [150, 90, "end", "a", "Request", "You ask Claude to do something."],
+      log: [270, 190, "stop", "b", "Logged", "A hook opens an entry in this week’s history file with the next ID, like H-2026W42-0042. On the first prompt of a new week it also asks Claude to sum up last week’s entries that have no Did.", "UserPromptSubmit hook"],
+      grd: [380, 190, "stop", "a", "Guarded", "Writing into another project’s notes is blocked. Reading them asks you first.", "PreToolUse hook"],
+      edt: [500, 290, "stop", "b", "Code edited", "Claude makes the change you asked for."],
+      trk: [620, 190, "stop", "a", "Edits tracked", "Each file Claude touches goes on a temporary list for the end-of-turn check. It is not saved in memory.", "PostToolUse hook"],
+      nw:  [740, 290, "stop", "bl", "Note written", "Claude updates the project note and adds the Did, Tags and Refs to the turn’s history entry.", "Following the rules in CLAUDE.md"],
+      chk: [870, 190, "check", "a", "Note check", "Before the turn can end, a hook checks two things: did code change without a note, and was any file edited without a Did in the history entry? Plan files don’t count.", "Stop hook"],
+      blk: [805, 370, "warn", "b", "Sent back", "A note or the Did is missing, so the turn can’t end. Claude goes back and writes it.", "Stop hook"],
+      reb: [990, 190, "stop", "a", "Lookups rebuilt", "The Files line is added to the entry, then REFS.md, the month’s refs file and the global index are regenerated from notes and history, only if something changed.", "Stop hook"],
+      sav: [1100, 190, "stop", "a", "Saved", "The notebook is committed to its own local git history. Nothing is pushed.", "Stop hook"],
+      sum: [1210, 90, "end", "a", "Summary", "You see which notes and which history entry changed."],
+    },
+    edges: [["req", "log"], ["log", "grd"], ["grd", "edt"], ["edt", "trk"], ["trk", "nw"], ["nw", "chk"],
+      ["chk", "blk", { kind: "warn", via: [[870, 330], [830, 370]] }], ["blk", "nw", { kind: "warn", via: [[760, 370], [740, 350]] }],
+      ["chk", "reb"], ["reb", "sav"], ["sav", "sum"]],
+    files: [["log", "history file"], ["nw", "note + Did"], ["reb", "lookup files"], ["sav", "git history"]],
+    notes: { req: "You ask Claude\nto do something", log: "New entry in this week’s\nfile; asks for last week’s summary", grd: "Other projects’\nnotes protected",
+      edt: "Claude changes\nyour code", trk: "Edited files\nare listed", nw: "Note, plus Did\nand Tags",
+      chk: "Note missing or\nDid missing?", blk: "Claude writes it first", reb: "Files line, REFS.md\nand refs/ rebuilt",
+      sav: "Local git commit,\nnothing pushed", sum: "What changed\nin memory" },
+    plab: { sav: "b" },
+    rides: [["req", "log", "grd", "edt", "trk", "nw", "chk", "blk", "nw", "chk", "reb", "sav", "sum"]],
+  },
+  sync: {
+    w: 1290, h: 450, idle: "Follow a sync",
+    lanes: [["This machine", 90, 40, 140], ["Sync repo", 190, 140, 240], ["Remote", 290, 240, 340], ["Other machine", 390, 340, 450]],
+    stations: {
+      run: [160, 90, "end", "a", "Run sync", "You run it when you start on a machine, and again before you leave it.", "/memory-sync"],
+      col: [300, 190, "stop", "b", "Collected", "This machine’s notes, memory scripts and CLAUDE.md are copied into the sync repo. REFS.md and refs/ stay local; each machine rebuilds them."],
+      com: [430, 190, "stop", "a", "Committed", "They are committed before anything is pulled, so local edits can’t be lost."],
+      pul: [560, 290, "stop", "b", "Pulled", "The other machine’s commits are fetched and rebased on top."],
+      chk: [690, 190, "check", "b", "Conflict?", "Did both machines change the same lines? History files merge line by line, so added entries never clash; any other file stops with a conflict."],
+      stp: [850, 190, "warn", "b", "Stopped", "Nothing is copied back or pushed. Resolve the conflict in the sync repo, then run sync again. The rerun keeps the other machine’s merged changes and only adds what you edited since."],
+      dis: [840, 90, "stop", "a", "Copied back", "The merged notes are copied back into each project on this machine, along with the memory scripts and CLAUDE.md."],
+      psh: [980, 290, "stop", "b", "Pushed", "Your commits go up to the remote."],
+      oth: [1140, 390, "end", "b", "Other machine", "Next time you sync there, it gets the same notes."],
+    },
+    edges: [["run", "col"], ["col", "com"], ["com", "pul"], ["pul", "chk"], ["chk", "dis", { via: [[790, 90]] }],
+      ["chk", "stp", { kind: "warn" }], ["dis", "psh"], ["psh", "oth"]],
+    rides: [["run", "col", "com", "pul", "chk", "dis", "psh", "oth"], ["run", "col", "com", "pul", "chk", "stp"]],
+    notes: { run: "When you switch\nmachines", col: "Notes and scripts\ncopied in", com: "Saved in git\nbefore pulling",
+      pul: "Fetch and rebase the\nother machine’s work", chk: "Same lines changed\non both machines?", stp: "Nothing copied back;\nresolve, run again",
+      dis: "Merged notes copied\ninto each project", psh: "Commits sent\nto the remote", oth: "Gets the same\nnotes next sync" },
+    plab: { chk: "br" },
+  },
+  // The whole journey of one request: hooks, Claude, the check, where things are saved, and later.
+  full: {
+    w: 1380, h: 610, idle: "Follow one request",
+    lanes: [["You", 90, 40, 140], ["Hooks", 190, 140, 240], ["Claude", 290, 240, 410], ["Later", 460, 410, 510], ["Saved to", 560, 510, 610]],
+    stations: {
+      req:  [150, 90, "end", "a", "Prompt", "You type a request in Claude Code."],
+      log:  [295, 190, "stop", "a", "Logged", "A hook adds an entry with the next ID to this week’s history file and remembers it for the end-of-turn check.", "UserPromptSubmit hook. Writes history/YYYY-Www.md"],
+      wk:   [380, 370, "stop", "b", "Week summary", "On the first prompt of a new week, the hook asks Claude to sum up last week’s entries that have no Did. Claude appends a Week summary to last week’s file.", "Once a week. Writes last week’s history file"],
+      work: [460, 290, "stop", "a", "Claude works", "Claude does the work. Writes into another project’s memory are blocked, reads of it ask you first, and every edited file is noted for the end-of-turn check (a temporary list, not part of memory).", "PreToolUse and PostToolUse hooks"],
+      nw:   [600, 290, "stop", "bl", "Note + Did", "Claude updates the note, with its one-line Summary, and adds Did, Tags and Refs to this turn’s history entry.", "Rules in CLAUDE.md"],
+      chk:  [730, 190, "check", "a", "Check", "Before the turn can end: was code changed without a note, or any file edited without a Did? Plan files don’t count.", "Stop hook"],
+      blk:  [665, 370, "warn", "b", "Sent back", "Something is missing, so the turn can’t end. Claude writes it first.", "Stop hook"],
+      reb:  [850, 190, "stop", "a", "Lookups rebuilt", "The hook adds the Files line to the entry and regenerates REFS.md, the month’s refs file and the global index, only if something changed.", "Stop hook. Writes REFS.md and refs/YYYY-MM.md"],
+      sav:  [960, 190, "stop", "b", "Committed", "memory/ is committed to its own local git history. Nothing is pushed.", "Stop hook. Writes memory/.git"],
+      sum:  [1070, 90, "end", "a", "Summary shown", "You see which notes and which history entry changed."],
+      syn:  [1180, 460, "stop", "b", "Synced", "When you switch machines, /memory-sync carries the notes through the sync repo. History merges line by line; any other clash stops the sync.", "/memory-sync, run by you"],
+      fnd:  [1300, 460, "end", "b", "Found later", "Days later Claude finds it with the lookup script, which searches the notes and every entry. Grepping history before the script is blocked.", "See Finding past work"],
+    },
+    edges: [["req", "log"], ["log", "work"], ["log", "wk", { kind: "alt" }], ["wk", "work", { kind: "alt" }], ["work", "nw"], ["nw", "chk"],
+      ["chk", "blk", { kind: "warn", via: [[730, 330], [690, 370]] }], ["blk", "nw", { kind: "warn", via: [[620, 370], [600, 350]] }],
+      ["chk", "reb"], ["reb", "sav"], ["sav", "sum"], ["sum", "syn", { kind: "alt" }], ["syn", "fnd"]],
+    files: [["log", "history file"], ["nw", "note + Did"], ["reb", "REFS + refs/"], ["sav", "memory/.git"], ["syn", "sync repo"]],
+    rides: [["req", "log", "work", "nw", "chk", "reb", "sav", "sum", "syn", "fnd"],
+      ["req", "log", "wk", "work", "nw", "chk", "blk", "nw", "chk", "reb", "sav", "sum"]],
+    notes: { req: "You type\na request", log: "Next ID in this\nweek’s file", wk: "First prompt of the\nweek: sum up last week",
+      work: "Guards on; edited\nfiles listed", nw: "Note, plus Did\nand Tags", chk: "Note missing or\nDid missing?", blk: "Claude writes it first",
+      reb: "Files line, REFS.md\nand refs/ rebuilt", sav: "Local commit,\nnothing pushed", sum: "What changed\nin memory",
+      syn: "/memory-sync to\nthe other machine", fnd: "Lookup script first;\ngrep only after" },
+  },
+  // One lookup script first; grep over history only after it (a hook blocks it before).
+  lookup: {
+    w: 1290, h: 440, idle: "Follow a lookup",
+    lanes: [["You", 90, 40, 140], ["Claude", 190, 140, 240], ["Opens", 290, 240, 340], ["Fallback", 390, 340, 440]],
+    stations: {
+      q:     [170, 90, "end", "a", "Question", "You ask about past work, for example “what did we build today?”"],
+      scr:   [400, 190, "stop", "a", "Lookup script", "Claude runs the lookup script with your question. One call reads the note list, every history entry (also the ones without a Did) and the week summaries. It lists what matches, plus everything else from the dates you named.", "Always the first step", "lookup-memory.sh"],
+      blk:   [280, 390, "warn", "b", "Blocked", "If Claude tries to grep or open the history files before running the script, a hook blocks the call and points it to the script. Two reads stay open: last week’s file when its week summary is due, and this turn’s file once something was edited.", "PreToolUse hook"],
+      notes: [620, 290, "stop", "b", "Notes", "Claude opens the notes the script listed, with their paths.", "", "N-feature-name"],
+      entry: [840, 290, "stop", "a", "Entry by ID", "The script prints any entry in full by its ID: what you asked, what was done, which files changed.", "", "H-2026W42-0042"],
+      ans:   [1180, 90, "end", "a", "Answer", "You get the ID, the date, what was done and which files changed."],
+      grep:  [840, 390, "stop", "b", "Search history", "Only if the script missed something. Plain grep over the history files is unlocked once the script has run in this turn.", "", "history/*.md"],
+      miss:  [1060, 390, "end", "b", "Not found", "If nothing matches either way, Claude says the lookup missed."],
+    },
+    edges: [["q", "scr"], ["scr", "notes"], ["notes", "entry"], ["entry", "ans"],
+      ["q", "blk", { kind: "warn", via: [[170, 330], [230, 390]] }], ["blk", "scr", { kind: "warn", via: [[340, 390], [400, 330]] }],
+      ["scr", "grep", { kind: "alt", via: [[600, 390]] }], ["grep", "entry", { kind: "alt" }],
+      ["grep", "miss", { kind: "alt" }]],
+    rides: [["q", "scr", "notes", "entry", "ans"], ["q", "blk", "scr", "notes", "entry", "ans"], ["q", "scr", "grep", "entry", "ans"], ["q", "scr", "grep", "miss"]],
+    notes: { q: "“What did we\nbuild today?”", scr: "One call: notes, every\nentry, week summaries", blk: "Grep before the\nscript is blocked",
+      notes: "Opens the notes\nit lists", entry: "--show prints\nthe full entry", ans: "ID, date, what was\ndone and files",
+      grep: "Only after the script", miss: "Say the lookup\nmissed" },
+    plab: { grep: "br" },
+  },
+};
+
+/* ---------- drawing helpers ---------- */
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function text(parent, x, y, s, cls, anchor = "middle") {
+  const t = el("text", { x, y, class: cls, "text-anchor": anchor }, parent);
+  t.textContent = s;
+  return t;
+}
+// Transit-map routing: horizontal, then 45°, then horizontal (or vertical when steep).
+function route(a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], ax = Math.abs(dx), ay = Math.abs(dy), sx = Math.sign(dx), sy = Math.sign(dy);
+  if (!dx || !dy) return [a, b];
+  if (ax >= ay) { const h = (ax - ay) / 2; return [a, [a[0] + sx * h, a[1]], [b[0] - sx * h, b[1]], b]; }
+  const v = (ay - ax) / 2;
+  return [a, [a[0], a[1] + sy * v], [b[0], b[1] - sy * v], b];
+}
+function rounded(pts, r = 18) {
+  pts = pts.filter((p, i) => !i || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const l1 = Math.hypot(cx - px, cy - py), l2 = Math.hypot(nx - cx, ny - cy), rr = Math.min(r, l1 / 2, l2 / 2);
+    d += ` L${cx - (cx - px) / l1 * rr},${cy - (cy - py) / l1 * rr} Q${cx},${cy} ${cx + (nx - cx) / l2 * rr},${cy + (ny - cy) / l2 * rr}`;
+  }
+  const z = pts[pts.length - 1];
+  return d + ` L${z[0]},${z[1]}`;
+}
+
+/* ---------- poster mode: spread the map out so every note fits ---------- */
+const POSTER = new URLSearchParams(location.search).get("poster");
+const KX = 1.4, KY = 1.5, GUTTER = 100;
+function spread(cfg) {
+  const X = x => GUTTER + (x - GUTTER) * KX, Y = y => y * KY, c = { ...cfg, w: X(cfg.w), h: Y(cfg.h), stations: {} };
+  for (const id in cfg.stations) { const st = [...cfg.stations[id]]; st[0] = X(st[0]); st[1] = Y(st[1]); c.stations[id] = st; }
+  c.lanes = cfg.lanes.map(([l, y, t, b]) => [l, Y(y), Y(t), Y(b)]);
+  c.edges = cfg.edges.map(([a, b, o]) => [a, b, o && o.via ? { ...o, via: o.via.map(([x, y]) => [X(x), Y(y)]) } : o]);
+  return c;
+}
+function posterLabel(g, s, pos, note) {
+  const off = s.type === "check" ? 22 : 18, lines = [[s.name, "nm halo", 17]];
+  if (s.code) lines.push([s.code, "cd halo", 16]);
+  (note ? note.split("\n") : []).forEach(t => lines.push([t, "nt halo", 16]));
+  let x = 0, anchor = "middle", y;
+  if (pos === "a") {
+    y = -off - lines.slice(1).reduce((h, l) => h + l[2], 0);
+  } else if (pos === "bl" || pos === "br") {
+    x = pos === "bl" ? -16 : 16; anchor = pos === "bl" ? "end" : "start"; y = 30;
+  } else y = off + 10;
+  lines.forEach(([t, cls, lh], i) => { if (i) y += lh; text(g, x, y, t, cls, anchor); });
+}
+
+/* ---------- build one route map ---------- */
+function build(key) {
+  const cfg = POSTER ? spread(MAPS[key]) : MAPS[key], svg = document.getElementById("map-" + key);
+  svg.setAttribute("viewBox", `0 0 ${cfg.w} ${cfg.h}`);
+  const S = {};
+  for (const id in cfg.stations) {
+    const [x, y, type, lab, name, desc, meta = "", code = ""] = cfg.stations[id];
+    S[id] = { id, x, y, type, lab, name, desc, meta, code };
+  }
+
+  cfg.lanes.forEach(([label, y, top, bot], i) => {
+    if (!i) top = 0;
+    if (i === cfg.lanes.length - 1) bot = cfg.h;
+    const g = el("g", { class: "lane" + (i % 2 ? " alt" : "") }, svg);
+    el("rect", { x: 0, y: top, width: cfg.w, height: bot - top }, g);
+    if (i) el("line", { class: "lane-r", x1: 0, x2: cfg.w, y1: top, y2: top }, g);
+    text(g, 24, y + 5, label, "lane-t", "start");
+  });
+
+  const edges = {}, eg = el("g", {}, svg);
+  [...cfg.edges].sort((a, b) => !!(b[2] && b[2].kind) - !!(a[2] && a[2].kind)).forEach(([a, b, o = {}]) => {
+    const A = [S[a].x, S[a].y], B = [S[b].x, S[b].y];
+    const pts = o.via ? [A, ...o.via, B] : route(A, B);
+    edges[a + ">" + b] = el("path", { class: "edge " + (o.kind || ""), d: rounded(pts) }, eg);
+  });
+
+  const tiles = {}, fl = cfg.lanes[cfg.lanes.length - 1];
+  (cfg.files || []).forEach(([at, label]) => {
+    const s = S[at], g = el("g", { class: "tile" }, svg);
+    el("line", { x1: s.x, x2: s.x, y1: fl[2] + 2, y2: fl[1] - 20 }, g);
+    el("rect", { x: s.x - 54, y: fl[1] - 18, width: 108, height: 36, rx: 4 }, g);
+    text(g, s.x, fl[1] + 5, label, "");
+    tiles[at] = g;
+  });
+
+  const nodes = {};
+  Object.values(S).forEach(s => {
+    const g = el("g", { class: `stn ${s.type}`, transform: `translate(${s.x},${s.y})`, tabindex: 0, role: "button", "aria-label": `${s.name}. ${s.desc}` }, svg);
+    el("circle", { class: "hit", r: 24 }, g);
+    if (s.type === "check") {
+      el("path", { class: "pulse", d: "M0,-10L10,0L0,10L-10,0Z" }, g);
+      el("path", { class: "mk", d: "M0,-10L10,0L0,10L-10,0Z", "stroke-linejoin": "round" }, g);
+    } else {
+      const r = s.type === "end" ? 7.5 : 5.5;
+      el("circle", { class: "pulse", r }, g);
+      el("circle", { class: "mk", r }, g);
+    }
+    const off = s.type === "check" ? 22 : 18;
+    if (POSTER) {
+      posterLabel(g, s, (cfg.plab && cfg.plab[s.id]) || s.lab, cfg.notes && cfg.notes[s.id]);
+    } else if (s.lab === "a") {
+      text(g, 0, -off, s.name, "nm halo");
+      if (s.code) text(g, 0, -off - 20, s.code, "cd halo");
+    } else if (s.lab === "b") {
+      text(g, 0, off + 10, s.name, "nm halo");
+      if (s.code) text(g, 0, off + 28, s.code, "cd halo");
+    } else {
+      text(g, -16, 30, s.name, "nm halo", "end");
+    }
+    nodes[s.id] = g;
+  });
+
+  if (POSTER) return;
+  const train = el("g", { class: "train" }, svg);
+  el("rect", { x: -10, y: -5, width: 20, height: 10, rx: 5 }, train);
+
+  rider(cfg, svg, S, edges, nodes, tiles, train, document.querySelector(`.dock[data-map="${key}"]`));
+}
+
+/* ---------- the moving train + caption ---------- */
+function rider(cfg, svg, S, edges, nodes, tiles, train, dock) {
+  dock.innerHTML = `<div class="cap" aria-live="polite"><div class="cap-name"></div><p class="cap-desc"></p><div class="cap-meta"></div></div>
+    <div class="ctrls"><button class="btn go" data-a="play">Play</button><button class="btn" data-a="next">Next stop</button><button class="btn" data-a="reset">Reset</button></div>`;
+  const $ = s => dock.querySelector(s), playBtn = $('[data-a="play"]');
+  const seq = [];
+  cfg.rides.forEach((r, i) => { if (i) seq.push(null); seq.push(...r); });
+  let idx = 0, started = false, playing = false, busy = false, token = 0;
+  const SPEED = 320, DWELL = 1500;
+
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const park = id => train.setAttribute("transform", `translate(${S[id].x},${S[id].y})`);
+  const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  function caption(id) {
+    const s = id && S[id];
+    $(".cap-name").textContent = s ? s.name : cfg.idle;
+    $(".cap-desc").textContent = s ? s.desc : "Press Play, or pick any stop on the map.";
+    $(".cap-meta").textContent = s ? s.meta : "";
+  }
+  function setBtn() { playBtn.textContent = playing ? "Pause" : (started && idx >= seq.length - 1 ? "Replay" : "Play"); }
+  function clearMarks() {
+    svg.querySelectorAll(".been, .here").forEach(n => n.classList.remove("been", "here"));
+    Object.values(tiles).forEach(t => t.classList.remove("lit"));
+  }
+  function arrive(id) {
+    svg.querySelectorAll(".stn.here").forEach(n => n.classList.remove("here"));
+    const g = nodes[id];
+    void g.getBBox();
+    g.classList.add("here", "been");
+    if (tiles[id]) tiles[id].classList.add("lit");
+    caption(id);
+    started = true;
+  }
+  function move(path, tk) {
+    return new Promise(done => {
+      const L = path.getTotalLength();
+      const put = len => {
+        const p = path.getPointAtLength(len), a = path.getPointAtLength(Math.max(0, len - 1)), b = path.getPointAtLength(Math.min(L, len + 1));
+        train.setAttribute("transform", `translate(${p.x},${p.y}) rotate(${Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI})`);
+      };
+      if (reduced) { put(L); return done(true); }
+      const dur = Math.max(450, L / SPEED * 1000), t0 = performance.now();
+      const frame = now => {
+        if (tk !== token) return done(false);
+        const t = Math.min(1, (now - t0) / dur);
+        put(ease(t) * L);
+        t < 1 ? requestAnimationFrame(frame) : done(true);
+      };
+      requestAnimationFrame(frame);
+    });
+  }
+  async function hop(tk) {
+    const nxt = idx + 1;
+    if (nxt >= seq.length) return false;
+    svg.classList.add("riding");
+    if (seq[nxt] === null) {
+      train.style.opacity = 0; await wait(350);
+      if (tk !== token) return false;
+      clearMarks(); idx = nxt + 1; park(seq[idx]);
+      train.style.opacity = 1; arrive(seq[idx]);
+      return true;
+    }
+    const path = edges[seq[idx] + ">" + seq[nxt]];
+    if (path) { if (!(await move(path, tk))) return false; path.classList.add("been"); }
+    idx = nxt; arrive(seq[idx]);
+    return true;
+  }
+  async function play() {
+    if (started && idx >= seq.length - 1) reset();
+    playing = true; setBtn();
+    const tk = ++token;
+    if (!started) { svg.classList.add("riding"); arrive(seq[0]); await wait(DWELL * .6); }
+    while (playing && tk === token) {
+      busy = true;
+      const ok = await hop(tk);
+      busy = false;
+      if (!ok || tk !== token) break;
+      if (idx >= seq.length - 1) break;
+      await wait(DWELL);
+    }
+    if (tk === token) { playing = false; setBtn(); }
+  }
+  async function next() {
+    if (busy) return;
+    playing = false; const tk = ++token;
+    if (!started) { svg.classList.add("riding"); arrive(seq[0]); setBtn(); return; }
+    busy = true; await hop(tk); busy = false; setBtn();
+  }
+  function reset() {
+    token++; playing = false; busy = false; started = false; idx = 0;
+    clearMarks(); svg.classList.remove("riding");
+    train.style.opacity = 1; park(seq[0]); caption(null); setBtn();
+  }
+  function pick(id) {
+    token++; playing = false; busy = false;
+    clearMarks(); svg.classList.remove("riding");
+    idx = seq.indexOf(id); park(id); train.style.opacity = 1; arrive(id); setBtn();
+  }
+
+  playBtn.onclick = () => playing ? (playing = false, setBtn()) : play();
+  $('[data-a="next"]').onclick = next;
+  $('[data-a="reset"]').onclick = reset;
+  Object.entries(nodes).forEach(([id, g]) => {
+    g.addEventListener("click", () => pick(id));
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(id); } });
+  });
+  reset();
+}
+
+Object.keys(MAPS).forEach(build);
+
+/* ---------- poster mode: show one map (or the overview) with a legend ---------- */
+if (POSTER) {
+  const root = document.documentElement, wrap = document.querySelector(".wrap");
+  root.classList.add("poster");
+  const g = {
+    step: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--line)" stroke-width="3.5" stroke-linecap="round"/><circle cx="20" cy="11" r="4.5" fill="var(--sheet)" stroke="var(--ink)" stroke-width="2"/></svg>Step`,
+    check: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--line)" stroke-width="3.5" stroke-linecap="round"/><path d="M20 4L27 11L20 18L13 11Z" fill="var(--sheet)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/></svg>Check`,
+    blocked: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--signal)" stroke-width="2" stroke-dasharray="4 4"/><circle cx="20" cy="11" r="4.5" fill="var(--sheet)" stroke="var(--signal)" stroke-width="2"/></svg>Blocked`,
+    file: `<svg viewBox="0 0 40 22"><rect x="4" y="3" width="32" height="16" rx="3" fill="var(--sheet)" stroke="var(--muted)" stroke-width="1.5"/></svg>File saved`,
+    later: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--line)" stroke-width="2.5" stroke-dasharray="5 4"/></svg>Once a week, or later`,
+    fallback: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--line)" stroke-width="2.5" stroke-dasharray="5 4"/></svg>Fallback`,
+    turn: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--turn)" stroke-width="4" stroke-linecap="round"/></svg>Every turn, image 2`,
+    sync: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--sync)" stroke-width="4" stroke-linecap="round"/></svg>Sync, image 3`,
+    look: `<svg viewBox="0 0 40 22"><path d="M2 11H38" stroke="var(--look)" stroke-width="4" stroke-linecap="round"/></svg>Lookup, image 4`,
+  };
+  const legend = { full: ["step", "check", "blocked", "later", "file"], overview: ["turn", "sync", "look"], turn: ["step", "check", "blocked", "file"], sync: ["step", "check", "blocked"], lookup: ["step", "fallback", "blocked"] };
+  let host;
+  if (POSTER === "overview") {
+    host = document.querySelector(".poster-overview"); host.hidden = false; host.style.setProperty("--line", "var(--turn)");
+  } else {
+    host = document.getElementById(POSTER); host.classList.add("show");
+  }
+  host.insertAdjacentHTML("beforeend", `<div class="poster-foot"><div class="key">${(legend[POSTER] || []).map(k => `<span>${g[k]}</span>`).join("")}</div><span>Claude memory system</span></div>`);
+  wrap.style.width = (Math.max(...Object.values(MAPS).map(m => spread(m).w)) + 98) + "px";
+  document.title = `${wrap.offsetWidth}x${Math.ceil(wrap.getBoundingClientRect().height)}`;
+}
+</script>
+</body>
+</html>
